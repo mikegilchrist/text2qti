@@ -73,7 +73,7 @@ TEMPLATE = '''\
     <grader_names_visible_to_final_grader>true</grader_names_visible_to_final_grader>
     <anonymous_instructor_annotations>false</anonymous_instructor_annotations>
     <post_policy>
-      <post_manually>false</post_manually>
+      <post_manually>true</post_manually>
     </post_policy>
   </assignment>
   <assignment_group_identifierref>{assignment_group_identifier}</assignment_group_identifierref>
