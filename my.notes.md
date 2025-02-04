@@ -8,7 +8,7 @@ Try again using simpler approach
 2. Install tools 
    > python3 -m pip install setuptools
 3. Build program and install
-   > python -m pip install text2qti
+   > python3 -m pipx install text2qti
 
 ## Above steps complet
 
