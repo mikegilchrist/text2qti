@@ -14,6 +14,7 @@ of which contains a list of Choice objects.
 '''
 
 
+import datetime
 import hashlib
 import io
 import itertools
@@ -67,6 +68,18 @@ start_patterns = {
     'quiz_feedback_is_solution': r'[Ff]eedback is solution:',
     'quiz_solutions_sample_groups': r'[Ss]olutions sample groups:',
     'quiz_solutions_randomize_groups': r'[Ss]olutions randomize groups:',
+    'quiz_due': r'[Qq]uiz [Dd]ue:',
+    'quiz_due_date': r'[Qq]uiz [Dd]ue [Dd]ate:',
+    'quiz_due_time': r'[Qq]uiz [Dd]ue [Tt]ime:',
+    'quiz_date': r'[Qq]uiz [Dd]ate:',
+    'quiz_time': r'[Qq]uiz [Tt]ime:',
+    'quiz_lock': r'[Qq]uiz [Ll]ock:',
+    'quiz_lock_date': r'[Qq]uiz [Ll]ock [Dd]ate:',
+    'quiz_lock_time': r'[Qq]uiz [Ll]ock [Tt]ime:',
+    'quiz_unlock': r'[Qq]uiz [Uu]nlock:',
+    'quiz_unlock_date': r'[Qq]uiz [Uu]nlock [Dd]ate:',
+    'quiz_unlock_time': r'[Qq]uiz [Uu]nlock [Tt]ime:',
+    'quiz_timezone': r'[Qq]uiz [Tt]imezone:',
 }
 # comments are currently handled separately from content
 comment_patterns = {
@@ -81,7 +94,12 @@ single_line = set(['question_points', 'group_pick', 'group_solutions_pick', 'gro
                    'numerical', 'shortans_correct_choice',
                    'quiz_shuffle_answers', 'quiz_show_correct_answers',
                    'quiz_one_question_at_a_time', 'quiz_cant_go_back',
-                   'quiz_feedback_is_solution', 'quiz_solutions_sample_groups', 'quiz_solutions_randomize_groups'])
+                   'quiz_feedback_is_solution', 'quiz_solutions_sample_groups', 'quiz_solutions_randomize_groups',
+                   'quiz_due', 'quiz_due_date', 'quiz_due_time',
+                   'quiz_date', 'quiz_time',
+                   'quiz_lock', 'quiz_lock_date', 'quiz_lock_time',
+                   'quiz_unlock', 'quiz_unlock_date', 'quiz_unlock_time',
+                   'quiz_timezone'])
 multi_line = set([x for x in start_patterns
                   if x not in no_content and x not in single_line])
 # whether parser needs to check for multi-paragraph content
@@ -592,6 +610,21 @@ class Quiz(object):
         self.feedback_is_solution: Optional[bool] = None
         self.solutions_sample_groups: Optional[bool] = None
         self.solutions_randomize_groups: Optional[bool] = None
+        # Date/time scheduling fields
+        self.due_at_raw: Optional[str] = None
+        self.due_date_raw: Optional[str] = None
+        self.due_time_raw: Optional[str] = None
+        self.lock_at_raw: Optional[str] = None
+        self.lock_date_raw: Optional[str] = None
+        self.lock_time_raw: Optional[str] = None
+        self.unlock_at_raw: Optional[str] = None
+        self.unlock_date_raw: Optional[str] = None
+        self.unlock_time_raw: Optional[str] = None
+        self.timezone_raw: Optional[str] = None
+        # Resolved ISO 8601 strings for XML output
+        self.due_at_xml = ''
+        self.lock_at_xml = ''
+        self.unlock_at_xml = ''
         self.questions_and_delims: List[Union[Question, GroupStart, GroupEnd, TextRegion]] = []
         self._current_group: Optional[Group] = None
         # The set for detecting duplicate questions uses the XML version of
@@ -762,6 +795,7 @@ class Quiz(object):
                 h.update(digest)
             self.hash_digest = h.digest()
             self.id = h.hexdigest()[:64]
+            self._resolve_datetimes()
         finally:
             self.md.finalize()
 
@@ -814,9 +848,18 @@ class Quiz(object):
             raise Text2qtiError(f'Failed to decode output of executed code:\n{e}')
         return stdout_str
 
+    def _any_quiz_options_set(self) -> bool:
+        '''Check whether any quiz-level options have been set.'''
+        return any(x is not None for x in (
+            self.shuffle_answers_raw, self.show_correct_answers_raw,
+            self.one_question_at_a_time_raw, self.cant_go_back_raw,
+            self.due_at_raw, self.due_date_raw, self.due_time_raw,
+            self.lock_at_raw, self.lock_date_raw, self.lock_time_raw,
+            self.unlock_at_raw, self.unlock_date_raw, self.unlock_time_raw,
+            self.timezone_raw))
+
     def append_quiz_title(self, text: str):
-        if any(x is not None for x in (self.shuffle_answers_raw, self.show_correct_answers_raw,
-                                       self.one_question_at_a_time_raw, self.cant_go_back_raw)):
+        if self._any_quiz_options_set():
             raise Text2qtiError('Must give quiz title before quiz options')
         if self._next_question_attr:
             raise Text2qtiError('Expected question; question title and/or points were set but not used')
@@ -830,8 +873,7 @@ class Quiz(object):
         self.title_xml = self.md.xml_escape(text)
 
     def append_quiz_description(self, text: str):
-        if any(x is not None for x in (self.shuffle_answers_raw, self.show_correct_answers_raw,
-                                       self.one_question_at_a_time_raw, self.cant_go_back_raw)):
+        if self._any_quiz_options_set():
             raise Text2qtiError('Must give quiz description before quiz options')
         if self._next_question_attr:
             raise Text2qtiError('Expected question; question title and/or points were set but not used')
@@ -933,6 +975,174 @@ class Quiz(object):
             self.solutions_randomize_groups = False
         else:
             raise Text2qtiError('Expected option value "true" or "false"')
+
+    # -- Date/time scheduling methods --
+
+    def _check_quiz_option_context(self, option_name: str):
+        '''Common validation: quiz options must appear before questions.'''
+        if self._next_question_attr:
+            raise Text2qtiError('Expected question; question title and/or points were set but not used')
+        if self.questions_and_delims:
+            raise Text2qtiError(f'Must give quiz option "{option_name}" before questions')
+
+    def append_quiz_due(self, text: str):
+        self._check_quiz_option_context('Quiz due')
+        if self.due_at_raw is not None:
+            raise Text2qtiError('"Quiz due" has already been set')
+        self.due_at_raw = text
+
+    def append_quiz_due_date(self, text: str):
+        self._check_quiz_option_context('Quiz due date')
+        if self.due_date_raw is not None:
+            raise Text2qtiError('"Quiz due date" has already been set')
+        self.due_date_raw = text
+
+    def append_quiz_due_time(self, text: str):
+        self._check_quiz_option_context('Quiz due time')
+        if self.due_time_raw is not None:
+            raise Text2qtiError('"Quiz due time" has already been set')
+        self.due_time_raw = text
+
+    def append_quiz_date(self, text: str):
+        '''Alias for append_quiz_due_date.'''
+        self.append_quiz_due_date(text)
+
+    def append_quiz_time(self, text: str):
+        '''Alias for append_quiz_due_time.'''
+        self.append_quiz_due_time(text)
+
+    def append_quiz_lock(self, text: str):
+        self._check_quiz_option_context('Quiz lock')
+        if self.lock_at_raw is not None:
+            raise Text2qtiError('"Quiz lock" has already been set')
+        self.lock_at_raw = text
+
+    def append_quiz_lock_date(self, text: str):
+        self._check_quiz_option_context('Quiz lock date')
+        if self.lock_date_raw is not None:
+            raise Text2qtiError('"Quiz lock date" has already been set')
+        self.lock_date_raw = text
+
+    def append_quiz_lock_time(self, text: str):
+        self._check_quiz_option_context('Quiz lock time')
+        if self.lock_time_raw is not None:
+            raise Text2qtiError('"Quiz lock time" has already been set')
+        self.lock_time_raw = text
+
+    def append_quiz_unlock(self, text: str):
+        self._check_quiz_option_context('Quiz unlock')
+        if self.unlock_at_raw is not None:
+            raise Text2qtiError('"Quiz unlock" has already been set')
+        self.unlock_at_raw = text
+
+    def append_quiz_unlock_date(self, text: str):
+        self._check_quiz_option_context('Quiz unlock date')
+        if self.unlock_date_raw is not None:
+            raise Text2qtiError('"Quiz unlock date" has already been set')
+        self.unlock_date_raw = text
+
+    def append_quiz_unlock_time(self, text: str):
+        self._check_quiz_option_context('Quiz unlock time')
+        if self.unlock_time_raw is not None:
+            raise Text2qtiError('"Quiz unlock time" has already been set')
+        self.unlock_time_raw = text
+
+    def append_quiz_timezone(self, text: str):
+        self._check_quiz_option_context('Quiz timezone')
+        if self.timezone_raw is not None:
+            raise Text2qtiError('"Quiz timezone" has already been set')
+        self.timezone_raw = text
+
+    @staticmethod
+    def _parse_time(time_str: str):
+        '''Parse time string into (hour, minute).
+
+        Accepts 24-hour (9:30, 09:30, 23:59) and 12-hour (9:30 PM, 9:30pm).
+        '''
+        time_str = time_str.strip()
+        m = re.match(r'^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?$', time_str)
+        if not m:
+            raise Text2qtiError(f'Invalid time format "{time_str}"; expected HH:MM or H:MM [AM/PM]')
+        hour, minute = int(m.group(1)), int(m.group(2))
+        ampm = m.group(3)
+        if ampm:
+            ampm = ampm.upper()
+            if hour < 1 or hour > 12:
+                raise Text2qtiError(f'Invalid hour {hour} for 12-hour time format')
+            if ampm == 'AM':
+                if hour == 12:
+                    hour = 0
+            else:  # PM
+                if hour != 12:
+                    hour += 12
+        if hour > 23 or minute > 59:
+            raise Text2qtiError(f'Invalid time "{time_str}"')
+        return hour, minute
+
+    @staticmethod
+    def _parse_date(date_str: str):
+        '''Parse date string YYYY-MM-DD into a datetime.date object.'''
+        date_str = date_str.strip()
+        m = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})$', date_str)
+        if not m:
+            raise Text2qtiError(f'Invalid date format "{date_str}"; expected YYYY-MM-DD')
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError as e:
+            raise Text2qtiError(f'Invalid date "{date_str}": {e}')
+
+    def _resolve_datetimes(self):
+        '''Resolve quiz date/time fields into ISO 8601 strings for XML output.'''
+        # Determine timezone
+        if self.timezone_raw is not None:
+            try:
+                import zoneinfo
+                tz = zoneinfo.ZoneInfo(self.timezone_raw)
+            except ImportError:
+                raise Text2qtiError(
+                    'Quiz timezone requires Python 3.9+ or the backports.zoneinfo package')
+            except KeyError:
+                raise Text2qtiError(f'Unknown timezone "{self.timezone_raw}"')
+        else:
+            # Use local system timezone
+            tz = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+
+        for field_name, combined_raw, date_raw, time_raw, default_time in [
+            ('due', self.due_at_raw, self.due_date_raw, self.due_time_raw, (23, 59)),
+            ('lock', self.lock_at_raw, self.lock_date_raw, self.lock_time_raw, (23, 59)),
+            ('unlock', self.unlock_at_raw, self.unlock_date_raw, self.unlock_time_raw, (0, 0)),
+        ]:
+            if combined_raw is not None and (date_raw is not None or time_raw is not None):
+                raise Text2qtiError(
+                    f'Cannot specify both "Quiz {field_name}:" and '
+                    f'separate "Quiz {field_name} date:/time:" fields')
+
+            date_str = None
+            time_str = None
+
+            if combined_raw is not None:
+                # Split "YYYY-MM-DD HH:MM [AM/PM]" into date and time parts
+                parts = combined_raw.strip().split(None, 1)
+                date_str = parts[0]
+                time_str = parts[1] if len(parts) > 1 else None
+            elif date_raw is not None:
+                date_str = date_raw
+                time_str = time_raw
+            elif time_raw is not None:
+                raise Text2qtiError(
+                    f'Quiz {field_name} time specified without a date')
+
+            if date_str is None:
+                continue  # field not specified
+
+            d = self._parse_date(date_str)
+            if time_str is not None:
+                hour, minute = self._parse_time(time_str)
+            else:
+                hour, minute = default_time
+
+            dt = datetime.datetime(d.year, d.month, d.day, hour, minute, 0, tzinfo=tz)
+            setattr(self, f'{field_name}_at_xml', dt.isoformat())
 
     def append_text_title(self, text: str):
         if self._next_question_attr:

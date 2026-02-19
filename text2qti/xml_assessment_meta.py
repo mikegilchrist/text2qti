@@ -38,9 +38,9 @@ TEMPLATE = '''\
   <module_locked>false</module_locked>
   <assignment identifier="{assignment_identifier}">
     <title>{title}</title>
-    <due_at/>
-    <lock_at/>
-    <unlock_at/>
+    <due_at>{due_at}</due_at>
+    <lock_at>{lock_at}</lock_at>
+    <unlock_at>{unlock_at}</unlock_at>
     <module_locked>false</module_locked>
     <workflow_state>unpublished</workflow_state>
     <assignment_overrides>
@@ -93,7 +93,10 @@ def assessment_meta(*,
                     shuffle_answers: str,
                     show_correct_answers: str,
                     one_question_at_a_time: str,
-                    cant_go_back: str) -> str:
+                    cant_go_back: str,
+                    due_at: str='',
+                    lock_at: str='',
+                    unlock_at: str='') -> str:
     '''
     Generate `assessment_meta.xml`.
     '''
@@ -107,4 +110,7 @@ def assessment_meta(*,
                            show_correct_answers=show_correct_answers,
                            hide_results='always' if show_correct_answers == 'false' else '',
                            one_question_at_a_time=one_question_at_a_time,
-                           cant_go_back=cant_go_back)
+                           cant_go_back=cant_go_back,
+                           due_at=due_at,
+                           lock_at=lock_at,
+                           unlock_at=unlock_at)
