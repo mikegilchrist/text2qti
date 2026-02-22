@@ -10,10 +10,14 @@ Try again using simpler approach
 3. Build program and install
    > python3 -m pipx install text2qti
 
-## Above steps complet
+## Above steps complete
 
 > text2qti ...
 
+The python environment is activated in the shell, so if `text2qti` is not found, issue 
+> source ~/Python/user/bin/activate
+A better solution is to add that command to your profile
+ 
 # 2025-01-22
 
 ## Using 'uv'
